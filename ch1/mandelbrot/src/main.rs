@@ -130,6 +130,7 @@ fn write_image(filename: &str, pixels: &[u8], bounds: (usize, usize))
 }
 
 fn main() {
+    // collect builds a vector from the iterator
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 5 {
@@ -145,7 +146,33 @@ fn main() {
     // macro vec![v; n] creates n-length vector of value v 
     let mut pixels = vec![0; bounds.0 * bounds.1];
 
-    render(&mut pixels, bounds, upper_left, lower_right);
+    // render(&mut pixels, bounds, upper_left, lower_right);
+    let threads = 8;
+    let rows_per_band = bounds.1 / threads + 1;
+
+    {
+        // chunks_mut returns an iterator of mutable, non-overlapping slices of the buffer
+        let bands: Vec<&mut [u8]> = pixels.chunks_mut(rows_per_band * bounds.0).collect();
+
+        // ensures all threads have completed before it returns
+        crossbeam::scope(|spawner| {
+            // iterator gives each iteration of loop body exclusive ownership of a buffer band so one thread can write at a time
+            for (i, band) in bands.into_iter().enumerate() {
+                let top = rows_per_band * i;
+                let height = band.len() / bounds.0;
+                let band_bounds = (bounds.0, height);
+                let band_upper_left = pixel_to_point(bounds, (0, top), upper_left, lower_right);
+                let band_lower_right = pixel_to_point(bounds, (bounds.0, top + height), upper_left, lower_right);
+
+                // creat a thread
+                // move indicates the closure takes ownership of the variables it uses
+                spawner.spawn(move |_| {
+                    render(band, band_bounds, band_upper_left, band_lower_right);
+                });
+            }
+        }).unwrap();
+        // unwrap so that if a thread panics, the program panics
+    }
 
     write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
 }
